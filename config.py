@@ -8,6 +8,8 @@ class Config:
     webhook_host: str = os.getenv("WEBHOOK_HOST")
     webhook_path: str = os.getenv("WEBHOOK_PATH", "/webhook")
     webhook_secret: str = os.getenv("WEBHOOK_SECRET", "super_secret_string_123")
+    # Новая переменная для канала
+    channel_id: str = os.getenv("CHANNEL_ID")
 
     @property
     def webhook_url(self) -> str:
