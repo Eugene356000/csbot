@@ -1,15 +1,17 @@
 import logging
 import os
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.filters import CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram import BaseMiddleware
 from typing import Callable, Dict, Any, Awaitable
 from sqlalchemy import select
+from datetime import datetime, timezone
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 from config import config
-from database import init_db, async_session, User
+from database import init_db, async_session, User, Match
 from handlers import shop, matches
 
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +19,6 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 
-# Мидлварь для передачи сессии БД в хендлеры
 class DbSessionMiddleware(BaseMiddleware):
     async def __call__(
         self,
@@ -31,6 +32,7 @@ class DbSessionMiddleware(BaseMiddleware):
 
 def get_main_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚔️ Ближайшие матчи", callback_data="upcoming_matches")],
         [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop")],
         [InlineKeyboardButton(text="💰 Получить 100 монет за подписку", callback_data="check_sub")]
     ])
@@ -81,9 +83,46 @@ async def check_subscription(callback: CallbackQuery, session):
         await callback.answer("Ошибка. Убедись, что бот админ в канале.", show_alert=True)
     await callback.answer()
 
+async def check_matches():
+    async with async_session() as session:
+        now = datetime.now(timezone.utc)
+        upcoming = await session.scalars(
+            select(Match).where(
+                Match.winner == None,
+                Match.is_announced == False,
+                Match.start_time != None
+            )
+        )
+        
+        for match in upcoming.all():
+            time_diff = (match.start_time - now).total_seconds() / 60
+            if 0 < time_diff <= 60:
+                users = await session.scalars(select(User))
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"🔵 {match.team1}", callback_data=f"vote_{match.id}_{match.team1}"),
+                     InlineKeyboardButton(text=f"🔴 {match.team2}", callback_data=f"vote_{match.id}_{match.team2}")]
+                ])
+                
+                for user in users.all():
+                    try:
+                        await bot.send_message(
+                            chat_id=user.id,
+                            text=f"⚔️ <b>Скоро матч!</b>\n\n<b>{match.team1}</b> vs <b>{match.team2}</b>\nВремя: {match.start_time.strftime('%Y-%m-%d %H:%M')} UTC\n\nУспей сделать ставку!",
+                            reply_markup=kb
+                        )
+                    except Exception:
+                        pass
+                match.is_announced = True
+                await session.commit()
+
 async def on_startup(app: web.Application):
     await init_db()
     await bot.set_webhook(url=config.webhook_url, secret_token=config.webhook_secret, drop_pending_updates=True)
+    
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(check_matches, 'interval', minutes=1)
+    scheduler.start()
+    
     logging.info(f"Вебхук установлен на {config.webhook_url}")
 
 async def on_shutdown(app: web.Application):
@@ -92,12 +131,9 @@ async def on_shutdown(app: web.Application):
 
 def main():
     app = web.Application()
-    
-    # Подключаем мидлварь для БД
     dp.message.middleware(DbSessionMiddleware())
     dp.callback_query.middleware(DbSessionMiddleware())
 
-    # Подключаем роутеры
     dp.include_router(shop.router)
     dp.include_router(matches.router)
     
