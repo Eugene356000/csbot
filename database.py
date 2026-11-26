@@ -12,7 +12,6 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 class User(Base):
     __tablename__ = "users"
-
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str] = mapped_column(String, nullable=True)
     balance: Mapped[int] = mapped_column(Integer, default=0)
@@ -20,7 +19,6 @@ class User(Base):
 
 class Admin(Base):
     __tablename__ = "admins"
-
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
