@@ -32,6 +32,7 @@ class Admin(Base):
 class Match(Base):
     __tablename__ = "matches"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pandascore_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=True) # <--- НОВАЯ СТРОКА
     team1: Mapped[str] = mapped_column(String)
     team2: Mapped[str] = mapped_column(String)
     winner: Mapped[str] = mapped_column(String, nullable=True)
