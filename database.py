@@ -35,6 +35,9 @@ class Match(Base):
     team1: Mapped[str] = mapped_column(String)
     team2: Mapped[str] = mapped_column(String)
     winner: Mapped[str] = mapped_column(String, nullable=True)
+    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    stream_link: Mapped[str] = mapped_column(String, nullable=True)
+    is_announced: Mapped[bool] = mapped_column(Boolean, default=False)
 
 class Prediction(Base):
     __tablename__ = "predictions"
