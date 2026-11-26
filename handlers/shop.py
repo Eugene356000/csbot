@@ -7,16 +7,16 @@ from database import User, Admin
 router = Router()
 
 PRICES = {
-    "1_day": 500,
+    "1_day": 300,
     "1_week": 1000,
-    "1_year": 3000
+    "1_year": 10000
 }
 
 def get_shop_keyboard():
     kb = [
-        [InlineKeyboardButton(text="⏱ Админка на 1 день (500 монет)", callback_data="buy_admin_1_day")],
+        [InlineKeyboardButton(text="⏱ Админка на 1 день (300 монет)", callback_data="buy_admin_1_day")],
         [InlineKeyboardButton(text="📅 Админка на 1 неделю (1000 монет)", callback_data="buy_admin_1_week")],
-        [InlineKeyboardButton(text="🏆 Админка на 1 год (3000 монет)", callback_data="buy_admin_1_year")],
+        [InlineKeyboardButton(text="🏆 Админка на 1 год (10000 монет)", callback_data="buy_admin_1_year")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
