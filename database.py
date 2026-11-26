@@ -24,6 +24,20 @@ class Admin(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+class Match(Base):
+    __tablename__ = "matches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team1: Mapped[str] = mapped_column(String)
+    team2: Mapped[str] = mapped_column(String)
+    winner: Mapped[str] = mapped_column(String, nullable=True)
+
+class Prediction(Base):
+    __tablename__ = "predictions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    match_id: Mapped[int] = mapped_column(Integer)
+    predicted_team: Mapped[str] = mapped_column(String)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
