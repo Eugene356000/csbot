@@ -3,21 +3,24 @@ import os
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.filters import CommandStart
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from typing import Callable, Dict, Any, Awaitable
 from sqlalchemy import select
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import config
-from database import init_db, async_session, User, Match
+from database import init_db, async_session, User, Match, Admin
 from handlers import shop, matches
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=config.bot_token)
+# ИСПРАВЛЕНИЕ 1: Добавлен parse_mode для работы HTML (жирный текст)
+bot = Bot(token=config.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 class DbSessionMiddleware(BaseMiddleware):
@@ -31,17 +34,19 @@ class DbSessionMiddleware(BaseMiddleware):
             data["session"] = session
             return await handler(event, data)
 
+# ИСПРАВЛЕНИЕ 2: Используем ReplyKeyboardMarkup для кнопок ВНИЗУ экрана
 def get_main_menu():
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚔️ Ближайшие матчи", callback_data="upcoming_matches")],
-        [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop")],
-        [InlineKeyboardButton(text="💰 Получить 100 монет за подписку", callback_data="check_sub")]
-    ])
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⚔️ Ближайшие матчи"), KeyboardButton(text="🛒 Магазин")],
+            [KeyboardButton(text="💰 Получить 100 монет")]
+        ],
+        resize_keyboard=True
+    )
     return kb
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message, session):
-    logging.info(f"Пользователь {message.from_user.id} нажал /start") # Логируем для проверки
     user = await session.scalar(select(User).where(User.id == message.from_user.id))
     if not user:
         new_user = User(id=message.from_user.id, username=message.from_user.username)
@@ -51,41 +56,39 @@ async def cmd_start(message: Message, session):
     else:
         await message.answer(f"С возвращением! Твой баланс: {user.balance} монет.")
         
-    await message.answer("Выбери действие:", reply_markup=get_main_menu())
+    await message.answer("Выбери действие на клавиатуре снизу:", reply_markup=get_main_menu())
 
-@dp.callback_query(F.data == "main_menu")
-async def main_menu(callback: CallbackQuery):
-    await callback.message.edit_text("Главное меню:", reply_markup=get_main_menu())
-
-@dp.callback_query(F.data == "check_sub")
-async def check_subscription(callback: CallbackQuery, session):
-    user_id = callback.from_user.id
+@dp.message(F.text == "💰 Получить 100 монет")
+async def check_subscription(message: Message, session):
+    user_id = message.from_user.id
     if not config.channel_id:
-        await callback.answer("Ошибка: Канал не настроен.", show_alert=True)
+        await message.answer("Ошибка: Канал не настроен.")
+        return
+
+    user = await session.scalar(select(User).where(User.id == user_id))
+    
+    if user.last_coin_reward is not None:
+        await message.answer("⏳ Ты уже получал этот бонус! Он дается только один раз.")
         return
 
     try:
         member = await bot.get_chat_member(chat_id=config.channel_id, user_id=user_id)
         if member.status in ["member", "administrator", "creator"]:
-            user = await session.scalar(select(User).where(User.id == user_id))
             user.balance += 100
+            user.last_coin_reward = datetime.utcnow()
             await session.commit()
-            await callback.message.edit_text(f"✅ Ты подписан!\nНачислено <b>100 монет</b>!\nБаланс: {user.balance}", reply_markup=get_main_menu())
+            await message.answer(f"✅ Ты подписан!\nНачислено <b>100 монет</b>!\nБаланс: {user.balance}", reply_markup=get_main_menu())
         else:
             chat = await bot.get_chat(config.channel_id)
             invite_link = chat.invite_link or "Ссылка скрыта"
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📢 Подписаться", url=invite_link)],
-                [InlineKeyboardButton(text="🔄 Проверить еще раз", callback_data="check_sub")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")]
+                [InlineKeyboardButton(text="📢 Подписаться", url=invite_link)]
             ])
-            await callback.message.edit_text("❌ Ты не подписан на канал!", reply_markup=kb)
+            await message.answer("❌ Ты не подписан на канал! Подпишись и нажми кнопку еще раз.", reply_markup=kb)
     except Exception as e:
         logging.error(f"Ошибка проверки подписки: {e}")
-        await callback.answer("Ошибка. Убедись, что бот админ в канале.", show_alert=True)
-    await callback.answer()
+        await message.answer("Ошибка. Убедись, что бот админ в канале.")
 
-# --- ПАРСИНГ МАТЧЕЙ С PANDASCORE ---
 async def fetch_pandascore_matches():
     if not config.pandascore_token:
         logging.warning("PANDASCORE_TOKEN не указан. Авто-парсинг отключен.")
@@ -129,10 +132,9 @@ async def fetch_pandascore_matches():
         except Exception as e:
             logging.error(f"Ошибка при запросе к PandaScore: {e}")
 
-# --- РАССЫЛКА АНОНСОВ ---
 async def check_matches():
     async with async_session() as session:
-        now = datetime.utcnow() # Используем без timezone для совместимости
+        now = datetime.utcnow()
         upcoming = await session.scalars(
             select(Match).where(
                 Match.winner == None,
@@ -162,6 +164,32 @@ async def check_matches():
                 match.is_announced = True
                 await session.commit()
 
+async def check_admins():
+    async with async_session() as session:
+        now = datetime.utcnow()
+        expired_admins = await session.scalars(
+            select(Admin).where(Admin.is_active == True, Admin.expires_at <= now)
+        )
+        
+        for admin in expired_admins.all():
+            if config.target_chat_id:
+                try:
+                    await bot.promote_chat_member(
+                        chat_id=config.target_chat_id,
+                        user_id=admin.user_id,
+                        can_change_info=False,
+                        can_delete_messages=False,
+                        can_invite_users=False,
+                        can_restrict_members=False,
+                        can_pin_messages=False,
+                        can_promote_members=False
+                    )
+                    await bot.send_message(chat_id=admin.user_id, text="⏳ Твой срок админки истек. Права сняты.")
+                except Exception:
+                    pass
+            admin.is_active = False
+            await session.commit()
+
 async def on_startup(app: web.Application):
     await init_db()
     await bot.set_webhook(url=config.webhook_url, secret_token=config.webhook_secret, drop_pending_updates=True)
@@ -169,6 +197,7 @@ async def on_startup(app: web.Application):
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(check_matches, 'interval', minutes=1)
     scheduler.add_job(fetch_pandascore_matches, 'interval', hours=1) 
+    scheduler.add_job(check_admins, 'interval', minutes=1) 
     scheduler.start()
     
     logging.info(f"Вебхук установлен на {config.webhook_url}")
